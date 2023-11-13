@@ -1,47 +1,34 @@
+mod config;
+use config::*;
 use sha2::Digest;
-use sha2::Sha256;
+use sha2::Sha512;
+use std::io;
+use std::path::Path;
+use std::process::exit;
 use std::{collections::HashMap, env, fs, io::prelude::*, path::PathBuf};
 
-#[allow(dead_code)]
-fn travel_dirs(path: &String) -> Result<(Vec<PathBuf>, Vec<PathBuf>), std::io::Error> {
+fn travel_dirs(conf: &Config) -> Result<(Vec<PathBuf>, Vec<PathBuf>), std::io::Error> {
     let mut files = vec![];
     let mut dirs = vec![];
-    let path = fs::canonicalize(path)?;
 
-    for i in fs::read_dir(path)? {
-        let i = i?;
-        match i.path() {
-            x if x.is_dir() => {
-                dirs.push(x);
-            }
-            x if x.is_file() => {
-                files.push(x);
-            }
-            _ => {}
-        }
-    }
+    let mut open = conf.paths();
 
-    Ok((dirs, files))
-}
-
-fn travel_dirs_recursive(path: &str) -> Result<(Vec<PathBuf>, Vec<PathBuf>), std::io::Error> {
-    let mut files = vec![];
-    let mut dirs = vec![];
-    let path = fs::canonicalize(path)?;
-
-    for i in fs::read_dir(path)? {
-        let i = i?;
-        match i.path() {
-            x if x.is_dir() => {
-                dirs.push(x);
-                let (mut d, mut f) = travel_dirs_recursive(i.path().to_str().unwrap())?;
-                dirs.append(&mut d);
-                files.append(&mut f);
+    while let Some(path) = open.pop() {
+        for content in fs::read_dir(path)? {
+            let content = content?;
+            if conf.is_verbose() {
+                println!("FOUND: {:?}", content.path());
             }
-            x if x.is_file() => {
-                files.push(x);
+            match content.path() {
+                x if x.is_dir() => {
+                    if conf.is_recursive() {
+                        open.push(x.clone());
+                    }
+                    dirs.push(x);
+                }
+                x if x.is_file() => files.push(x),
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -74,10 +61,11 @@ fn save_to_file(
 
 fn translate_to_hashmap(
     files: Vec<PathBuf>,
+    conf: &Config,
 ) -> Result<HashMap<String, Vec<PathBuf>>, std::io::Error> {
     let mut hashmap = HashMap::new();
     for file_path in files {
-        let mut sha = Sha256::new();
+        let mut sha = Sha512::new();
         let mut file = fs::read(&file_path)?;
 
         sha.update(&mut file);
@@ -88,9 +76,12 @@ fn translate_to_hashmap(
             .collect::<Vec<_>>()
             .join("");
         hashmap
-            .entry(hash)
+            .entry(hash.clone())
             .or_insert(Vec::new())
             .push(file_path.clone());
+        if conf.is_verbose() && hashmap.get(&hash).unwrap().len() > 1 {
+            println!("FOUND DUPLICATE: {file_path:?}");
+        }
     }
 
     Ok(hashmap)
@@ -117,14 +108,14 @@ fn delete_duplicates(hashmap: &HashMap<String, Vec<PathBuf>>) {
 }
 
 fn main() -> Result<(), std::io::Error> {
-    let args: Vec<_> = env::args().collect();
-    let (_, files) = travel_dirs_recursive(&args[1])?;
+    let conf = parse_args();
+    let (_, files) = travel_dirs(&conf)?;
+    let hashmap = translate_to_hashmap(files, &conf)?;
 
-    let hashmap = translate_to_hashmap(files)?;
-
-    delete_duplicates(&hashmap);
-
-    save_to_file(&hashmap, "output.json".to_string())?;
-
+    if conf.is_output() {
+        save_to_file(&hashmap, "output.json".to_owned())?;
+    } else {
+        delete_duplicates(&hashmap);
+    }
     Ok(())
 }
