@@ -1,6 +1,8 @@
 # DelDup - Delete Duplicates
 
 DelDup is Rust program for deleting duplicates.
+## Warining
+Even if this program is using Sha512 as hash functions there is still very small posibility that there will be some colisions.
 
 ## Installation
 To install you need to have installed `cargo` version 1.73.0 or later.
